@@ -58,13 +58,15 @@ function enrollmentForm(enrollment) {
     paidAt: format(new Date(), "yyyy-MM-dd"),
     paymentMethod: "cash",
     bankAccountId: "",
-    debtInstallments: enrollment.debtInstallments || [],
+    debtInstallments: (enrollment.debtInstallments || [])
+      .filter((row) => Number(row.remainingAmount ?? row.amount) > 0 && row.status !== "waived")
+      .map((row) => ({ amount: row.remainingAmount ?? row.amount, dueDate: row.dueDate, note: row.note || "" })),
     schedule: enrollment.schedule || legacySchedule,
     status: enrollment.status,
   };
 }
 
-export function TrainingFields({ form, setForm, options, editing = false, coachMode = false, requireMember = false, memberOptions = [] }) {
+export function TrainingFields({ form, setForm, options, editing = false, priceChanged = false, coachMode = false, requireMember = false, memberOptions = [] }) {
   const coaches =
     options?.employees?.filter((row) => row.isPtRole) ||
     [];
@@ -216,6 +218,18 @@ export function TrainingFields({ form, setForm, options, editing = false, coachM
             onChange={(expiresAt) => setForm({ ...form, expiresAt })}
           />
         </Field>}
+        {!coachMode && editing && (
+          <>
+            <Field label="Giá trị gói PT" hint="Giá mới không được thấp hơn số tiền đã thu.">
+              <MoneyInput min={0} value={form.finalPrice || 0} onChange={(finalPrice) => setForm({ ...form, finalPrice })} />
+            </Field>
+            <div className="field">
+              <span className="field-label">Đã thu PT</span>
+              <strong className="text-sm">{money(form.paidAmount)}</strong>
+              <span className="field-hint">Công nợ sau điều chỉnh: {money(remainingDebt)}</span>
+            </div>
+          </>
+        )}
         {!coachMode && !editing && (
           <>
             <Field label="Giá trị gói PT">
@@ -248,7 +262,7 @@ export function TrainingFields({ form, setForm, options, editing = false, coachM
             )}
           </>
         )}
-        {!coachMode && !editing && remainingDebt > 0 && (
+        {!coachMode && (!editing || priceChanged) && remainingDebt > 0 && (
           <div className="field form-span">
             <span className="field-label">Hạn công nợ PT</span>
             <div className="grid gap-2">
@@ -345,6 +359,8 @@ export function TrainingForm({
     setInitial(next);
     setLocalError("");
   }, [enrollment, open]);
+  const priceChanged = !coachMode && !!enrollment && Number(form.finalPrice || 0) !== Number(initial.finalPrice || 0);
+  const validateFinance = !coachMode && (!enrollment || priceChanged);
   const remainingDebt = Math.max(Number(form.finalPrice || 0) - Number(form.paidAmount || 0), 0);
   const debtTotal = (form.debtInstallments || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
   return (
@@ -362,7 +378,7 @@ export function TrainingForm({
             setLocalError("Vui lòng chọn hội viên đăng ký PT.");
             return;
           }
-          if (!enrollment && Number(form.paidAmount || 0) > Number(form.finalPrice || 0)) {
+          if (validateFinance && Number(form.paidAmount || 0) > Number(form.finalPrice || 0)) {
             setLocalError("Số tiền PT đã thanh toán không thể lớn hơn giá trị gói.");
             return;
           }
@@ -370,11 +386,11 @@ export function TrainingForm({
             setLocalError("Vui lòng chọn tài khoản nhận tiền khi thanh toán PT chuyển khoản.");
             return;
           }
-          if (!enrollment && remainingDebt > 0 && Math.round(debtTotal) !== Math.round(remainingDebt)) {
+          if (validateFinance && remainingDebt > 0 && Math.round(debtTotal) !== Math.round(remainingDebt)) {
             setLocalError("Tổng các hạn công nợ PT phải bằng số tiền còn nợ.");
             return;
           }
-          if (!enrollment && remainingDebt > 0 && !(form.debtInstallments || []).every((row) => Number(row.amount || 0) > 0 && row.dueDate)) {
+          if (validateFinance && remainingDebt > 0 && !(form.debtInstallments || []).every((row) => Number(row.amount || 0) > 0 && row.dueDate)) {
             setLocalError("Vui lòng nhập đủ số tiền và ngày hạn cho từng kỳ công nợ PT.");
             return;
           }
@@ -388,6 +404,11 @@ export function TrainingForm({
                 "debtInstallments",
               ].includes(key)))
             : form;
+          if (priceChanged) {
+            payload.finalPrice = Number(form.finalPrice || 0);
+            payload.debtInstallments = remainingDebt > 0 ? form.debtInstallments : [];
+          }
+          setLocalError("");
           onSubmit(payload);
         }}
       >
@@ -397,6 +418,7 @@ export function TrainingForm({
             setForm={setForm}
             options={options}
             editing={!!enrollment}
+            priceChanged={priceChanged}
             coachMode={coachMode}
             requireMember={requireMember}
             memberOptions={memberOptions}
